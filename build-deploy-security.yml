@@ -1,0 +1,136 @@
+trigger:
+- main  # Triggers pipeline on commits to main branch
+
+variables:
+  azureSubscription: 'L’EVATE Inc.'  
+  appName: 'your-app-service-name'  
+  resourceGroup: 'your-resource-group'  
+  buildConfiguration: 'Release'  
+
+stages:
+# New security scanning stage
+- stage: SecurityScan
+  displayName: Security Scanning
+  jobs:
+  - job: SecurityChecks
+    displayName: Security Validation
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    # Secret scanning to prevent credential leaks
+    - task: CredScan@2
+      displayName: 'Secret Detection Scan'
+    
+    # Dependency vulnerability scanning
+    - task: DependencyScan@0
+      displayName: 'Dependency Vulnerability Check'
+      inputs:
+        scanType: 'npm'  # Also supports: maven, gradle, nuget, etc.
+    
+    # Static Application Security Testing (SAST)
+    - task: SecurityScan@1
+      displayName: 'Static Code Analysis'
+      inputs:
+        scanType: 'sast'
+        outputFormat: 'sarif'
+    
+    # Infrastructure as Code scanning
+    - task: IaCScan@0
+      displayName: 'Infrastructure Security Scan'
+      inputs:
+        targetType: 'arm'  # Scan ARM templates if present
+        severityThreshold: 'high'
+
+- stage: Build
+  displayName: Build stage
+  dependsOn: SecurityScan  # Require security scans to pass first
+  jobs:
+  - job: Build
+    displayName: Build job
+    pool:
+      vmImage: 'ubuntu-latest'  # Use Microsoft-hosted Ubuntu agent
+    
+    steps:
+    # Install Node.js runtime
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
+    
+    # Install dependencies and build application
+    - script: |
+        npm install
+        npm run build --if-present
+      displayName: 'Install dependencies and build'
+    
+    # Package build artifacts into zip file
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
+        replaceExistingArchive: true
+      displayName: 'Create deployment package'
+    
+    # Publish zip artifact for deployment stage
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/app.zip'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build  # Requires successful build first
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy job
+    environment: 'production'  # Deployment environment
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    strategy:
+      runOnce:  # Standard deployment strategy
+        deploy:
+          steps:
+          # Download build artifacts from build stage
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'drop'
+              downloadPath: '$(System.ArtifactsDirectory)'
+          
+          # Stop App Service before deployment
+          - task: AzureAppServiceManage@0
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              Action: 'Stop Azure App Service'
+              WebAppName: '$(appName)'
+          
+          # Deploy zip package to App Service
+          - task: AzureAppServiceManage@0
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              Action: 'Deploy Azure App Service'
+              WebAppName: '$(appName)'
+              Package: '$(System.ArtifactsDirectory)/drop/app.zip'
+          
+          # Start App Service after deployment
+          - task: AzureAppServiceManage@0
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              Action: 'Start Azure App Service'
+              WebAppName: '$(appName)'
+          
+          # Swap staging slot with production (blue-green deployment)
+          - task: AzureAppServiceManage@0
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              Action: 'Swap Slots'
+              WebAppName: '$(appName)'
+              ResourceGroupName: '$(resourceGroup)'
+              SourceSlot: 'staging'
+              SwapWithProduction: true
