@@ -1,0 +1,22 @@
+resource "azurerm_monitor_action_group" "critical" {
+  name                = "CriticalAlerts"
+  email_receiver {
+    name          = "admin"
+    email_address = "team@example.com"
+  }
+}
+
+resource "azurerm_monitor_metric_alert" "high_latency" {
+  name                = "HighResponseLatency"
+  scopes              = [azurerm_application_insights.app.id]
+  criteria {
+    metric_namespace = "microsoft.insights/components"
+    metric_name      = "requests/duration"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 500 # ms
+  }
+  action {
+    action_group_id = azurerm_monitor_action_group.critical.id
+  }
+}
