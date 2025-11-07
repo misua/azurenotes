@@ -1,0 +1,16 @@
+# main.tf
+module "frontend" {
+  source = "./modules/app_service"
+  name   = "frontend-app"
+  sku    = "P1v3"
+}
+
+module "backend" {
+  source = "./modules/function_app"
+  name   = "backend-api"
+}
+
+module "database" {
+  source = "./modules/cosmosdb"
+  name   = "app-db"
+}
